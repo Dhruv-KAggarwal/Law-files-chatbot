@@ -9,19 +9,11 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
-import pickle
 
 # Load environment variables
 load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=api_key)
-
-# Check if faiss-gpu is available
-try:
-    import faiss
-    faiss_gpu_available = hasattr(faiss, 'StandardGpuResources')
-except ImportError:
-    faiss_gpu_available = False
 
 def get_pdf_text(pdf_docs):
     text = ""
@@ -38,16 +30,6 @@ def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     chunks = text_splitter.split_text(text)
     return chunks
-
-def save_data(text_chunks):
-    with open("text_chunks.pkl", "wb") as f:
-        pickle.dump(text_chunks, f)
-
-def load_data():
-    if os.path.exists("text_chunks.pkl"):
-        with open("text_chunks.pkl", "rb") as f:
-            return pickle.load(f)
-    return None
 
 def get_vector_store(text_chunks):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
@@ -89,9 +71,9 @@ def user_input(user_question):
 
 def main():
     st.set_page_config("Chat PDF")
-    st.header("Chat with Judgements💁")
+    st.header("Chat with Judgements 💁")
 
-    user_question = st.text_input("Ask a Question from the  Files")
+    user_question = st.text_input("Ask a Question from the Files")
 
     if user_question:
         user_input(user_question)
@@ -103,14 +85,8 @@ def main():
             with st.spinner("Processing..."):
                 raw_text = get_pdf_text(pdf_docs)
                 text_chunks = get_text_chunks(raw_text)
-                save_data(text_chunks)
                 get_vector_store(text_chunks)
                 st.success("Done")
 
-    # Load previously saved data if available
-    text_chunks = load_data()
-    if text_chunks:
-        get_vector_store(text_chunks)
-
-if __name__ == "__main__":
+if _name_ == "_main_":
     main()
