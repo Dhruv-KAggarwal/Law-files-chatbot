@@ -16,7 +16,6 @@ load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=api_key)
 
-# Paths for saving data
 TEXT_CHUNKS_PATH = "text_chunks.pkl"
 FAISS_INDEX_PATH = "faiss_index"
 
@@ -35,68 +34,82 @@ def get_pdf_text(pdf_docs):
     return text
 
 def get_text_chunks(text):
-    """Split extracted text into chunks."""
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
-    return text_splitter.split_text(text)
+    """Split extracted text into clean, manageable chunks."""
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=300)
+    chunks = text_splitter.split_text(text)
+    # Clean and filter chunks
+    cleaned_chunks = [chunk.strip() for chunk in chunks if isinstance(chunk, str) and chunk.strip()]
+    return cleaned_chunks
 
 def save_data(text_chunks):
-    """Save text chunks to a file."""
     with open(TEXT_CHUNKS_PATH, "wb") as f:
         pickle.dump(text_chunks, f)
 
 def load_data():
-    """Load saved text chunks."""
     if os.path.exists(TEXT_CHUNKS_PATH):
         with open(TEXT_CHUNKS_PATH, "rb") as f:
             return pickle.load(f)
     return None
 
 def get_vector_store(text_chunks):
-    """Generate and save FAISS vector store."""
+    """Generate FAISS vector store from text chunks safely."""
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local(FAISS_INDEX_PATH)
+    
+    # Check for invalid or oversized chunks
+    safe_chunks = []
+    for i, chunk in enumerate(text_chunks):
+        if len(chunk) <= 3000:
+            safe_chunks.append(chunk)
+        else:
+            print(f"Chunk {i} skipped (too long: {len(chunk)} chars)")
+
+    if not safe_chunks:
+        raise ValueError("No valid chunks to embed. Check your PDF content.")
+
+    try:
+        vector_store = FAISS.from_texts(safe_chunks, embedding=embeddings)
+        vector_store.save_local(FAISS_INDEX_PATH)
+    except Exception as e:
+        print("Error creating vector store:", e)
+        raise
 
 def get_conversational_chain():
-    """Create a question-answering chain using Gemini AI."""
+    """Setup Gemini-powered QA chain."""
     prompt_template = """
     Answer the question as detailed as possible from the provided context. If the answer is not in
-    the context, say: "answer is not available in the context." Do not provide incorrect answers.
+    the context, say: "Answer is not available in the context." Do not guess.
 
-    Context:\n {context}?\n
-    Question:\n {question}\n
+    Context:\n{context}\n
+    Question:\n{question}\n
 
     Answer:
     """
-
     model = ChatGoogleGenerativeAI(model="gemini-1.5-pro", temperature=0.3)
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
     return load_qa_chain(model, chain_type="stuff", prompt=prompt)
 
 def user_input(user_question):
-    """Handle user input and generate responses."""
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    
-    # Load FAISS index with dangerous deserialization enabled
-    new_db = FAISS.load_local(FAISS_INDEX_PATH, embeddings, allow_dangerous_deserialization=True)
-    docs = new_db.similarity_search(user_question)
 
+    try:
+        db = FAISS.load_local(FAISS_INDEX_PATH, embeddings, allow_dangerous_deserialization=True)
+    except Exception as e:
+        st.error(f"Failed to load vector index: {e}")
+        return
+
+    docs = db.similarity_search(user_question)
     chain = get_conversational_chain()
-
-    response = chain(
-        {"input_documents": docs, "question": user_question},
-        return_only_outputs=True
-    )
-
-    print(response)
-    st.write("Reply: ", response["output_text"])
+    try:
+        response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
+        st.write("Reply:", response["output_text"])
+    except Exception as e:
+        st.error(f"Failed to generate response: {e}")
 
 def main():
-    """Main function for Streamlit UI."""
     st.set_page_config(page_title="Chat with PDF using Gemini 💁")
     st.header("Chat with PDFs 💬")
 
-    user_question = st.text_input("Ask a Question from the PDF Files")
+    user_question = st.text_input("Ask a question from the PDF files:")
 
     if user_question:
         user_input(user_question)
@@ -108,14 +121,12 @@ def main():
             with st.spinner("Processing... ⏳"):
                 raw_text = get_pdf_text(pdf_docs)
                 text_chunks = get_text_chunks(raw_text)
-                save_data(text_chunks)
-                get_vector_store(text_chunks)
-                st.success("✅ Processing Complete!")
-
-    # Load and process saved data if available
-    text_chunks = load_data()
-    if text_chunks:
-        get_vector_store(text_chunks)
+                if text_chunks:
+                    save_data(text_chunks)
+                    get_vector_store(text_chunks)
+                    st.success("✅ Processing complete!")
+                else:
+                    st.error("❌ No valid text extracted from the PDFs.")
 
 if __name__ == "__main__":
     main()
